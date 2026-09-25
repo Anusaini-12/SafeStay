@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+.next/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Firebase Admin credentials
+firebase-service-account.json
