@@ -32,20 +32,25 @@ export async function findListings(city, area, preferences = {}) {
 
   try {
     const results = await searchGoogleMaps(query);
+    const rawListings = results.local_results || [];
+    const listings = rawListings.map(normalizeListing);
 
-    // TEMP: uncomment to check what fields SerpApi actually returns for a
-    // PG listing — needed to confirm whether price data exists at all.
-    // if (results.local_results?.[0]) {
-    //   console.log("Sample raw listing:", JSON.stringify(results.local_results[0], null, 2));
-    // }
+    const cityLower = city.trim().toLowerCase();
+    const matchingCity = listings.filter((l) =>
+      l.address?.toLowerCase().includes(cityLower)
+    );
 
-    const listings = results.local_results || [];
-    return listings.map(normalizeListing);
+    // If at least some results genuinely match the city, prefer those
+    // first but don't hide the rest — just flag the mismatch honestly.
+    const cityMismatch = matchingCity.length === 0 && listings.length > 0;
+    const orderedListings = matchingCity.length > 0
+      ? [...matchingCity, ...listings.filter((l) => !matchingCity.includes(l))]
+      : listings;
+
+    return { listings: orderedListings, cityMismatch };
   } catch (error) {
     console.error("findListings failed:", error.message);
-    // FIX: degrade gracefully — return an empty list instead of crashing
-    // the whole /api/search-pgs request. The frontend already handles a
-    // "No listings found" empty state.
-    return [];
+
+    return { listings: [], cityMismatch: false };
   }
 }

@@ -5,12 +5,16 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const FALLBACK_VERDICT = {
   verdict: "Not enough data",
   confidence: "low",
+  // FIX: no mention of "AI" or "Gemini" — this is a system status message,
+  // not something the end user needs implementation detail about.
   summary:
-    "The investigation data was collected, but AI analysis is temporarily unavailable.",
+    "We couldn't finish checking this listing just now. Try investigating it again in a moment.",
   evidence: [],
-  warnings: [
-    "Gemini analysis could not be completed because the AI service was temporarily unavailable.",
-  ],
+  // FIX: a system failure is NOT a trust warning about the property —
+  // it was wrongly living here before, which reads as "something is
+  // wrong with this PG" when it actually means "our backend hiccuped."
+  warnings: [],
+  reportedDetails: { rent: null, food: null, roomType: null, facilities: [] },
 };
 
 export async function synthesizeTrustVerdict(listing, investigationData) {
@@ -25,7 +29,11 @@ export async function synthesizeTrustVerdict(listing, investigationData) {
   const prompt = `
 You are analyzing a PG/room listing for a rental discovery application.
 
-Your job is to assess the evidence provided by our investigation tools.
+Your job is to assess the evidence provided by our investigation tools, AND
+separately extract any concrete rental details (rent, food, room type,
+facilities) that happen to be mentioned in that evidence — real estate
+listing pages and classifieds often mention these in passing even though
+this app's own listing data doesn't structurally capture them.
 
 LISTING:
 ${JSON.stringify(listing, null, 2)}
@@ -50,6 +58,7 @@ IMPORTANT RULES:
 13. Every item in "evidence" and "warnings" must be directly supported by the provided data.
 14. Do not mention information that is not present in the provided data.
 15. If external investigation results are empty and only listing metadata or neighborhood information is available, prefer "Not enough data".
+16. For "reportedDetails": only fill a field if it is EXPLICITLY mentioned somewhere in the provided search result titles/snippets — e.g. a snippet saying "PG for boys @ ₹8,000/month, WiFi, food included" would justify filling rent, food, and facilities. If nothing in the evidence mentions a field, use null (or an empty array for facilities) — do not guess or estimate typical rent/facilities for this type of listing.
 
 Return ONLY valid JSON. Do not use markdown code fences.
 
@@ -64,7 +73,13 @@ Use exactly this structure:
   ],
   "warnings": [
     "specific concern directly supported by the provided data"
-  ]
+  ],
+  "reportedDetails": {
+    "rent": "exact rent as mentioned in a source, or null",
+    "food": "food/meal arrangement as mentioned in a source, or null",
+    "roomType": "room/sharing type as mentioned in a source, or null",
+    "facilities": ["facility as mentioned in a source"]
+  }
 }
 `;
 
@@ -89,9 +104,7 @@ Use exactly this structure:
   const text = result.response.text();
   const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
-  // FIX: JSON.parse with no try/catch meant a single malformed response
-  // (extra prose, trailing comma, etc.) crashed the whole request instead
-  // of degrading to the same safe fallback used for a failed API call.
+
   try {
     const parsed = JSON.parse(cleanedText);
     return parsed;
@@ -101,7 +114,7 @@ Use exactly this structure:
     return {
       ...FALLBACK_VERDICT,
       summary:
-        "The investigation data was collected, but the AI's response could not be read.",
+        "We couldn't finish checking this listing just now. Try investigating it again in a moment.",
     };
   }
 }

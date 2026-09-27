@@ -11,12 +11,12 @@ router.post("/search-pgs", async (req, res) => {
   }
 
   try {
-    const listings = await findListings(city, area, {
+    const { listings, cityMismatch } = await findListings(city, area, {
       ...(preferences || {}),
       budget,
     });
 
-    res.json({ listings });
+    res.json({ listings, cityMismatch });
   } catch (error) {
     console.error("POST /api/search-pgs failed:", error.message);
     res.status(500).json({ error: "Failed to search PGs" });
