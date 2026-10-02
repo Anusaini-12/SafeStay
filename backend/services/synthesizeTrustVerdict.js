@@ -1,39 +1,46 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 const FALLBACK_VERDICT = {
-  verdict: "Not enough data",
+  verdict: "Assessment unavailable",
   confidence: "low",
-  // FIX: no mention of "AI" or "Gemini" — this is a system status message,
-  // not something the end user needs implementation detail about.
+
   summary:
     "We couldn't finish checking this listing just now. Try investigating it again in a moment.",
+
   evidence: [],
-  // FIX: a system failure is NOT a trust warning about the property —
-  // it was wrongly living here before, which reads as "something is
-  // wrong with this PG" when it actually means "our backend hiccuped."
+
   warnings: [],
-  reportedDetails: { rent: null, food: null, roomType: null, facilities: [] },
+
+  reportedDetails: {
+    rent: null,
+    food: null,
+    roomType: null,
+    facilities: [],
+  },
 };
 
+// Lighter, higher-availability model first so the limited free-tier quota
+// of gemini-3.8-flash is not spent on every request.
+const MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-flash-lite",
+];
+
+const ATTEMPTS_PER_MODEL = 2;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function synthesizeTrustVerdict(listing, investigationData) {
-  const model = genAI.getGenerativeModel({
-    // FIX: "gemini-3.6-flash" is not a real model name — this call was
-    // failing every single time, which is why every listing fell back to
-    // "Not enough data". gemini-2.5-flash is the current stable, free-tier
-    // friendly choice as of now.
-    model: "gemini-2.5-flash",
-  });
+  // Initialize Gemini here so dotenv has already loaded the API key
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
   const prompt = `
 You are analyzing a PG/room listing for a rental discovery application.
 
 Your job is to assess the evidence provided by our investigation tools, AND
 separately extract any concrete rental details (rent, food, room type,
-facilities) that happen to be mentioned in that evidence — real estate
-listing pages and classifieds often mention these in passing even though
-this app's own listing data doesn't structurally capture them.
+facilities) that happen to be mentioned in that evidence.
 
 LISTING:
 ${JSON.stringify(listing, null, 2)}
@@ -50,15 +57,16 @@ IMPORTANT RULES:
 5. Missing information is NOT negative evidence.
 6. A high rating or many reviews does NOT prove that a listing is trustworthy.
 7. Do not call the listing officially "verified" or guaranteed safe.
-8. Use "Verified" only when the available evidence contains enough positive/consistent information and no significant negative signals were found in the investigated sources.
-9. Use "Caution" when there are meaningful concerns but the evidence does not establish a serious scam.
-10. Use "Red Flag" only when the provided evidence contains clear and significant warning signs.
-11. Use "Not enough data" when the available evidence is insufficient to make a meaningful assessment.
+8. Use "Verified" only when multiple independent sources provide consistent positive information about the listing itself.
+9. Do not use "Verified" merely because no complaints were found.
+10. Use "Caution" when the listing has some supporting evidence but important details are inconsistent, unclear, or cannot be confirmed.
+11. Use "Red Flag" only when the provided evidence contains clear and significant warning signs.
 12. Nearby places are only neighborhood context. Their presence does NOT prove that the PG itself is trustworthy.
 13. Every item in "evidence" and "warnings" must be directly supported by the provided data.
 14. Do not mention information that is not present in the provided data.
-15. If external investigation results are empty and only listing metadata or neighborhood information is available, prefer "Not enough data".
-16. For "reportedDetails": only fill a field if it is EXPLICITLY mentioned somewhere in the provided search result titles/snippets — e.g. a snippet saying "PG for boys @ ₹8,000/month, WiFi, food included" would justify filling rent, food, and facilities. If nothing in the evidence mentions a field, use null (or an empty array for facilities) — do not guess or estimate typical rent/facilities for this type of listing.
+15. If external investigation results are empty and only listing metadata or neighborhood information is available, use "Not enough data".
+16. For "reportedDetails": only fill a field if it is explicitly mentioned in the provided search result titles/snippets. Do not guess or estimate.
+17. Write "summary", "evidence", and "warnings" in simple everyday language.
 
 Return ONLY valid JSON. Do not use markdown code fences.
 
@@ -85,16 +93,51 @@ Use exactly this structure:
 
   let result;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      result = await model.generateContent(prompt);
-      break;
-    } catch (error) {
-      console.log(`Gemini attempt ${attempt} failed:`, error.status, error.message);
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+  outer: for (const modelName of MODELS) {
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: { responseMimeType: "application/json" },
+    });
+
+    for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
+      try {
+        result = await model.generateContent(prompt);
+        console.log(`Gemini success with ${modelName}`);
+        break outer;
+      } catch (error) {
+        console.error(
+          `${modelName} attempt ${attempt} failed:`,
+          error.status,
+          String(error.message).slice(0, 200)
+        );
+
+        // Daily free-tier quota used up: retrying this model is pointless,
+        // so move straight to the next one.
+        const isDailyQuota =
+          error.status === 429 &&
+          /PerDay|free_tier_requests/i.test(String(error.message));
+
+        if (isDailyQuota) {
+          console.log(`Daily quota reached for ${modelName}.`);
+          break;
+        }
+
+        // Retry only temporary errors (503 overloaded, other 429 rate limits).
+        // Anything else (invalid key, bad request) fails immediately.
+        const retryable = error.status === 503 || error.status === 429;
+
+        if (!retryable) {
+          return FALLBACK_VERDICT;
+        }
+
+        if (attempt < ATTEMPTS_PER_MODEL) {
+          console.log("Temporarily unavailable. Retrying shortly...");
+          await sleep(1500 * attempt);
+        }
       }
     }
+
+    console.log(`Switching away from ${modelName}...`);
   }
 
   if (!result) {
@@ -102,19 +145,27 @@ Use exactly this structure:
   }
 
   const text = result.response.text();
-  const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
+  const cleanedText = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
 
   try {
     const parsed = JSON.parse(cleanedText);
+
+    // "Not enough data" can never be high confidence
+    if (parsed.verdict === "Not enough data") {
+      parsed.confidence = "low";
+    }
+
     return parsed;
   } catch (parseError) {
-    console.error("Failed to parse Gemini response as JSON:", parseError.message);
+    console.error(
+      "Failed to parse Gemini response as JSON:",
+      parseError.message
+    );
     console.error("Raw response was:", cleanedText);
-    return {
-      ...FALLBACK_VERDICT,
-      summary:
-        "We couldn't finish checking this listing just now. Try investigating it again in a moment.",
-    };
+    return FALLBACK_VERDICT;
   }
 }

@@ -1,33 +1,51 @@
 import { getJson } from "serpapi";
 
-export async function searchGoogleMaps(query) {
-  const results = await getJson({
-    engine: "google_maps",
-    q: query,
-    hl: "en",
-    gl: "in",
-    api_key: process.env.SERPAPI_KEY,
-  });
+const SERPAPI_TIMEOUT = 15000;
 
-  return results;
+function getSerpApiKey() {
+  const apiKey = process.env.SERPAPI_KEY;
+
+  if (!apiKey) {
+    throw new Error("SERPAPI_KEY is not configured");
+  }
+
+  return apiKey;
+}
+
+async function runSerpApiSearch(engine, query) {
+  if (typeof query !== "string" || !query.trim()) {
+    throw new Error("SerpApi query must be a non-empty string");
+  }
+
+  const apiKey = getSerpApiKey();
+
+  try {
+    return await getJson({
+      engine,
+      q: query.trim(),
+      hl: "en",
+      gl: "in",
+      api_key: apiKey,
+      timeout: SERPAPI_TIMEOUT,
+    });
+  } catch (error) {
+    console.error(
+      `SerpApi ${engine} search failed:`,
+      error.message
+    );
+
+    throw error;
+  }
+}
+
+export async function searchGoogleMaps(query) {
+  return runSerpApiSearch("google_maps", query);
 }
 
 export async function searchGoogle(query) {
-  return getJson({
-    engine: "google",
-    q: query,
-    hl: "en",
-    gl: "in",
-    api_key: process.env.SERPAPI_KEY,
-  });
+  return runSerpApiSearch("google", query);
 }
 
 export async function searchGoogleNews(query) {
-  return getJson({
-    engine: "google_news",
-    q: query,
-    hl: "en",
-    gl: "in",
-    api_key: process.env.SERPAPI_KEY,
-  });
+  return runSerpApiSearch("google_news", query);
 }

@@ -63,11 +63,11 @@ cp .env.example .env
 npm run dev
 ```
 
-Runs on `http://localhost:3001`.
+Runs on `http://localhost:5000`.
 
 - Get a SerpApi key at https://serpapi.com
 - Get a Gemini API key at https://aistudio.google.com
-- The Gemini model used is `gemini-2.5-flash` (stable, free-tier friendly)
+- The Gemini model used is `gemini-3.8-flash` (stable, free-tier friendly)
 - If investigations keep falling back to "we couldn't finish checking this
   listing," check this server's console for `Gemini attempt X failed:` —
   that means the API call itself is failing (bad/missing key, region
@@ -124,5 +124,5 @@ Runs on `http://localhost:5173` (Vite's default).
 - **Backend**: Node.js, Express
 - **Data**: SerpApi (Google Maps, Google Search, Google News, Google Maps
   Reviews engines)
-- **AI reasoning**: Google Gemini (`gemini-2.5-flash`) — used internally
+- **AI reasoning**: Google Gemini (`gemini-3.8-flash`) — used internally
   only; not named anywhere in user-facing copy
