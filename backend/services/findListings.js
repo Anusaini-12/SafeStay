@@ -173,10 +173,6 @@ export async function findListings(city, area, preferences = {}) {
       "findListings failed:",
       error.message
     );
-
-    return {
-      listings: [],
-      cityMismatch: false,
-    };
+    throw error;
   }
 }

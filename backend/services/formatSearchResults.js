@@ -6,6 +6,7 @@ export function formatSearchResults(searchResults) {
       return {
         type: "google",
         query: result.query,
+        status: data.error ? "failed" : "ok",
         results: (data.organic_results || []).slice(0, 5).map((item) => ({
           title: item.title,
           link: item.link,
@@ -18,6 +19,7 @@ export function formatSearchResults(searchResults) {
       return {
         type: "news",
         query: result.query,
+        status: data.error ? "failed" : "ok",
         results: (data.news_results || []).slice(0, 5).map((item) => ({
           title: item.title,
           link: item.link,

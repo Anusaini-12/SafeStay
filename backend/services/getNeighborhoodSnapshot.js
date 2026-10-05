@@ -23,8 +23,6 @@ export async function getNeighborhoodSnapshot(listing) {
     }));
   } catch (error) {
     console.error("getNeighborhoodSnapshot failed:", error.message);
-    // FIX: an empty neighborhood section is fine — a broken investigation
-    // that dies entirely because this one call failed is not.
-    return [];
+    throw error;
   }
 }

@@ -12,19 +12,14 @@ function getSerpApiKey() {
   return apiKey;
 }
 
-async function runSerpApiSearch(engine, query) {
-  if (typeof query !== "string" || !query.trim()) {
-    throw new Error("SerpApi query must be a non-empty string");
-  }
-
+async function runSerpApiRequest(engine, params, localization = {}) {
   const apiKey = getSerpApiKey();
 
   try {
     return await getJson({
       engine,
-      q: query.trim(),
-      hl: "en",
-      gl: "in",
+      ...localization,
+      ...params,
       api_key: apiKey,
       timeout: SERPAPI_TIMEOUT,
     });
@@ -39,13 +34,67 @@ async function runSerpApiSearch(engine, query) {
 }
 
 export async function searchGoogleMaps(query) {
-  return runSerpApiSearch("google_maps", query);
+  if (typeof query !== "string" || !query.trim()) {
+    throw new Error("SerpApi query must be a non-empty string");
+  }
+
+  return runSerpApiRequest(
+    "google_maps",
+    { q: query.trim() },
+    { hl: "en", gl: "in" }
+  );
 }
 
 export async function searchGoogle(query) {
-  return runSerpApiSearch("google", query);
+  if (typeof query !== "string" || !query.trim()) {
+    throw new Error("SerpApi query must be a non-empty string");
+  }
+
+  return runSerpApiRequest(
+    "google",
+    { q: query.trim() },
+    { hl: "en", gl: "in" }
+  );
 }
 
 export async function searchGoogleNews(query) {
-  return runSerpApiSearch("google_news", query);
+  if (typeof query !== "string" || !query.trim()) {
+    throw new Error("SerpApi query must be a non-empty string");
+  }
+
+  return runSerpApiRequest(
+    "google_news",
+    { q: query.trim() },
+    { hl: "en", gl: "in" }
+  );
+}
+
+export async function getGoogleMapsPlaceDetails(placeId) {
+  if (!placeId) {
+    return null;
+  }
+
+  return runSerpApiRequest(
+    "google_maps",
+    { place_id: placeId },
+    { hl: "en", gl: "in" }
+  );
+}
+
+export async function getGoogleMapsReviews(dataId, placeId) {
+  const placeIdentifier = dataId
+    ? { data_id: dataId }
+    : placeId
+      ? { place_id: placeId }
+      : null;
+
+  if (!placeIdentifier) {
+    return null;
+  }
+
+  return runSerpApiRequest(
+    "google_maps_reviews",
+    placeIdentifier,
+    { hl: "en" }
+  );
 }

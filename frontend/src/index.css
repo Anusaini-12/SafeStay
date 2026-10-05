@@ -10,6 +10,25 @@ body {
   margin: 0;
 }
 
+@keyframes verified-pulse {
+  0%, 100% {
+    box-shadow: 0 4px 18px rgba(74, 122, 84, 0.16), 0 0 0 0 rgba(74, 122, 84, 0);
+  }
+  50% {
+    box-shadow: 0 4px 20px rgba(74, 122, 84, 0.24), 0 0 0 5px rgba(74, 122, 84, 0.1);
+  }
+}
+
+.verified-badge {
+  animation: verified-pulse 2.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verified-badge {
+    animation: none;
+  }
+}
+
 .line-clamp-1 {
   display: -webkit-box;
   -webkit-line-clamp: 1;

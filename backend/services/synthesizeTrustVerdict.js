@@ -7,6 +7,9 @@ const FALLBACK_VERDICT = {
   summary:
     "We couldn't finish checking this listing just now. Try investigating it again in a moment.",
 
+  reasoning:
+    "An assessment could not be generated because the analysis service was unavailable.",
+
   evidence: [],
 
   warnings: [],
@@ -31,6 +34,88 @@ const ATTEMPTS_PER_MODEL = 2;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const VALID_VERDICTS = new Set([
+  "Verified",
+  "Caution",
+  "Red Flag",
+  "Not enough data",
+]);
+
+const VALID_CONFIDENCE = new Set(["low", "medium", "high"]);
+
+function stringsOnly(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string")
+    : [];
+}
+
+export function normalizeAssessment(parsed, investigationData) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return FALLBACK_VERDICT;
+  }
+
+  let verdict = VALID_VERDICTS.has(parsed.verdict)
+    ? parsed.verdict
+    : "Not enough data";
+  const evidence = stringsOnly(parsed.evidence);
+  const warnings = stringsOnly(parsed.warnings);
+
+  // Negative claims must have a matching, user-visible explanation.
+  if (verdict === "Red Flag" && warnings.length === 0) {
+    verdict = "Caution";
+  } else if (verdict === "Verified" && warnings.length > 0) {
+    verdict = "Caution";
+  } else if (verdict === "Verified" && evidence.length === 0) {
+    verdict = "Not enough data";
+  }
+
+  let confidence = VALID_CONFIDENCE.has(parsed.confidence)
+    ? parsed.confidence
+    : "low";
+  const failedSources = new Set(investigationData.sourceErrors || []);
+
+  for (const source of investigationData.searchResults || []) {
+    if (source.status === "failed") failedSources.add(source.type);
+  }
+
+  // Unavailable sources affect certainty, not the trust category itself.
+  if (failedSources.size > 0 && confidence === "high") {
+    confidence = "medium";
+  }
+  if (failedSources.size > 1) {
+    confidence = "low";
+  }
+  if (verdict === "Not enough data") {
+    confidence = "low";
+  }
+
+  const details = parsed.reportedDetails || {};
+
+  return {
+    verdict,
+    confidence,
+    summary:
+      typeof parsed.summary === "string" && parsed.summary.trim()
+        ? parsed.summary
+        : "The available public information is limited.",
+    reasoning:
+      typeof parsed.reasoning === "string" && parsed.reasoning.trim()
+        ? parsed.reasoning
+        : "This category is based on the listing-specific evidence and concerns shown below.",
+    evidence,
+    warnings,
+    reportedDetails: {
+      rent:
+        typeof details.rent === "string" ? details.rent : null,
+      food:
+        typeof details.food === "string" ? details.food : null,
+      roomType:
+        typeof details.roomType === "string" ? details.roomType : null,
+      facilities: stringsOnly(details.facilities),
+    },
+  };
+}
+
 export async function synthesizeTrustVerdict(listing, investigationData) {
   // Initialize Gemini here so dotenv has already loaded the API key
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -38,9 +123,9 @@ export async function synthesizeTrustVerdict(listing, investigationData) {
   const prompt = `
 You are analyzing a PG/room listing for a rental discovery application.
 
-Your job is to assess the evidence provided by our investigation tools, AND
-separately extract any concrete rental details (rent, food, room type,
-facilities) that happen to be mentioned in that evidence.
+Assess the listing-specific evidence provided by the investigation tools and
+separately extract concrete rental details (rent, food, room type, facilities)
+when those details are explicitly stated.
 
 LISTING:
 ${JSON.stringify(listing, null, 2)}
@@ -51,22 +136,61 @@ ${JSON.stringify(investigationData, null, 2)}
 IMPORTANT RULES:
 
 1. Use ONLY information explicitly present in the LISTING or INVESTIGATION DATA.
+
 2. Never invent facts, sources, reviews, complaints, searches, or findings.
-3. Do not claim that any source confirmed something unless that information is explicitly present in the provided data.
-4. A search returning no relevant results does NOT prove that the listing is safe.
-5. Missing information is NOT negative evidence.
-6. A high rating or many reviews does NOT prove that a listing is trustworthy.
-7. Do not call the listing officially "verified" or guaranteed safe.
-8. Use "Verified" only when multiple independent sources provide consistent positive information about the listing itself.
-9. Do not use "Verified" merely because no complaints were found.
-10. Use "Caution" when the listing has some supporting evidence but important details are inconsistent, unclear, or cannot be confirmed.
-11. Use "Red Flag" only when the provided evidence contains clear and significant warning signs.
-12. Nearby places are only neighborhood context. Their presence does NOT prove that the PG itself is trustworthy.
-13. Every item in "evidence" and "warnings" must be directly supported by the provided data.
-14. Do not mention information that is not present in the provided data.
-15. If external investigation results are empty and only listing metadata or neighborhood information is available, use "Not enough data".
-16. For "reportedDetails": only fill a field if it is explicitly mentioned in the provided search result titles/snippets. Do not guess or estimate.
-17. Write "summary", "evidence", and "warnings" in simple everyday language.
+
+3. Do not claim that any source confirmed something unless that information is
+explicitly present in the provided data.
+
+4. A search returning no relevant results does NOT prove that the listing is
+safe. A failed search is not the same as a successful search with no results.
+
+5. Missing information, a missing website, or a missing source is NOT negative
+evidence. Missing data lowers confidence only; it must not by itself produce
+"Caution" or "Red Flag".
+
+6. Use "Verified" when substantive, listing-specific positive evidence supports
+the listing and there is no credible negative evidence or significant
+contradiction. Examples include several substantive positive Google reviews
+and/or consistent independent public coverage. A high rating or review count
+alone is not enough. "Verified" is an assessment label, not an official
+certification or a guarantee of safety.
+
+7. Use "Caution" when there is a credible, specific concern, a meaningful
+contradiction, or a suspicious signal that deserves follow-up but does not
+meet the high bar for "Red Flag".
+
+8. Use "Red Flag" only for clear, specific, significant negative evidence
+supported by the supplied sources. Name the supporting evidence in warnings.
+Do not escalate a verdict based on a generic allegation or an unsupported
+search-result match.
+
+9. Use "Not enough data" only when there is not enough substantive,
+listing-specific evidence to make a meaningful assessment. It is not a
+fallback merely because some details or sources are missing.
+
+10. Keep verdict and confidence independent. Verdict describes the direction
+of the evidence; confidence describes how complete and reliable that evidence
+is. A positive or cautious verdict may still have low confidence.
+
+11. Treat review text as user-generated evidence, not independently verified
+fact. Mention the number and substance of relevant reviews rather than
+presenting an allegation as proven.
+
+12. Nearby places are neighborhood context only and do not establish that the
+PG itself is trustworthy.
+
+13. Every item in "evidence", "warnings", and "reasoning" must be directly
+grounded in supplied data. "evidence" is positive/listing-supporting evidence;
+"warnings" contains only credible negative or unresolved contradictory signals,
+not missing data.
+
+14. For "reportedDetails", only fill a field if it is explicitly stated in a
+provided result or review. Do not guess or estimate.
+
+15. Write "summary", "reasoning", "evidence", and "warnings" in simple
+everyday language. In "reasoning", explain why the verdict follows from the
+signals and how missing/failed sources affect confidence.
 
 Return ONLY valid JSON. Do not use markdown code fences.
 
@@ -76,6 +200,7 @@ Use exactly this structure:
   "verdict": "Verified | Caution | Red Flag | Not enough data",
   "confidence": "low | medium | high",
   "summary": "short explanation based only on the provided evidence",
+  "reasoning": "explainable reason for the verdict and confidence",
   "evidence": [
     "specific evidence directly supported by the provided data"
   ],
@@ -152,14 +277,10 @@ Use exactly this structure:
     .trim();
 
   try {
-    const parsed = JSON.parse(cleanedText);
-
-    // "Not enough data" can never be high confidence
-    if (parsed.verdict === "Not enough data") {
-      parsed.confidence = "low";
-    }
-
-    return parsed;
+    return normalizeAssessment(
+      JSON.parse(cleanedText),
+      investigationData
+    );
   } catch (parseError) {
     console.error(
       "Failed to parse Gemini response as JSON:",

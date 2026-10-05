@@ -87,7 +87,7 @@ function ListingCard({
                   Reviews
                 </p>
                 <p className="mt-0.5 text-xs font-medium text-[#403C35] dark:text-[#C8C3B9]">
-                  {listing.reviewCount ?? 0}
+                  {listing.reviewCount ?? "N/A"}
                 </p>
               </div>
             </div>

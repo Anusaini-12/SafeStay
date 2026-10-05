@@ -1,21 +1,46 @@
+import { useState } from "react";
 import VerdictBadge from "./VerdictBadge";
 import {
-  ExternalLink,
-  MapPin,
-  Search,
-  Newspaper,
-  Home,
+  ArrowUpRight,
   CheckCircle2,
   CircleAlert,
-  Phone,
-  Star,
+  ExternalLink,
   Globe,
+  MapPin,
+  Newspaper,
+  Phone,
+  Search,
   ShieldCheck,
-  ArrowUpRight,
+  Star,
 } from "lucide-react";
 
-function mapsLink(coordinates, fallbackQuery) {
-  if (coordinates?.latitude && coordinates?.longitude) {
+const EXPLANATIONS = {
+  Verified: "Good signs and no serious concerns in the sources checked.",
+  Caution: "Some findings are worth reviewing before you decide.",
+  "Red Flag": "Serious concerns were reported. Read the supporting details.",
+  "Not enough data": "There is not enough listing-specific evidence to assess this stay.",
+  "Assessment unavailable":
+    "The assessment service is unavailable. The collected information is still shown below.",
+};
+
+const CONFIDENCE = { low: 1, medium: 2, high: 3 };
+
+const card =
+  "rounded-2xl border border-black/[0.08] bg-white dark:border-white/[0.07] dark:bg-[#1B1E24]";
+const muted = "text-[#8A8680] dark:text-[#6E6A62]";
+const heading = "text-[#1B1E24] dark:text-[#F4F1EA]";
+
+function mapsLink(coordinates, fallbackQuery, placeId) {
+  if (placeId) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      fallbackQuery || "",
+    )}&query_place_id=${encodeURIComponent(placeId)}`;
+  }
+
+  if (
+    coordinates?.latitude != null &&
+    coordinates?.longitude != null
+  ) {
     return `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`;
   }
 
@@ -35,577 +60,515 @@ function ListingDetails({ investigation }) {
     evidence = [],
     neighborhood = [],
     reviews = [],
+    sourceErrors = [],
   } = investigation || {};
+  const [activeTab, setActiveTab] = useState("overview");
 
-  const googleSource = evidence.find((e) => e.type === "google");
-  const newsSource = evidence.find((e) => e.type === "news");
+  const googleSource = evidence.find((source) => source.type === "google");
+  const newsSource = evidence.find((source) => source.type === "news");
+  const webResults = googleSource?.results || [];
+  const newsResults = newsSource?.results || [];
+  const details = verdict.reportedDetails || {};
+  const facilities = Array.isArray(details.facilities)
+    ? details.facilities
+    : [];
+  const photos = [
+    ...new Set(
+      (Array.isArray(listing.photos) ? listing.photos : []).filter(
+        (photo) => typeof photo === "string" && photo,
+      ),
+    ),
+  ];
 
+  if (photos.length === 0 && listing.image) {
+    photos.push(listing.image);
+  }
+
+  const listingQuery = [listing.name, listing.address]
+    .filter(Boolean)
+    .join(" ");
   const listingMapsLink = mapsLink(
     listing.coordinates,
-    `${listing.name} ${listing.address || ""}`,
+    listingQuery,
+    listing.placeId,
   );
-
-  const googleReviewsLink = listing.id
-    ? `https://search.google.com/local/reviews?placeid=${listing.id}`
+  const reviewsLink = listing.placeId
+    ? `https://search.google.com/local/reviews?placeid=${encodeURIComponent(
+        listing.placeId,
+      )}`
     : listingMapsLink;
 
-  // A source counts as "checked" only if it actually returned results
-  const webCount = googleSource?.results?.length || 0;
-  const newsCount = newsSource?.results?.length || 0;
-
-  const sourcesChecked = [
+  const sources = [
     {
       icon: Search,
-      label: "Web search",
-      done: webCount > 0,
-      count: webCount,
+      label: "Web",
+      status: googleSource?.status,
+      count: webResults.length,
     },
     {
       icon: Newspaper,
-      label: "News search",
-      done: newsCount > 0,
-      count: newsCount,
+      label: "News",
+      status: newsSource?.status,
+      count: newsResults.length,
     },
     {
-      icon: Home,
-      label: "Neighborhood",
-      done: neighborhood.length > 0,
+      icon: Star,
+      label: "Google reviews",
+      status: sourceErrors.includes("Google reviews") ? "failed" : "ok",
+      count: reviews.length,
+    },
+    {
+      icon: MapPin,
+      label: "Nearby",
+      status: sourceErrors.includes("Neighborhood") ? "failed" : "ok",
       count: neighborhood.length,
     },
   ];
-
-  const sourcesCheckedCount = sourcesChecked.filter(
-    (source) => source.done,
+  const returnedSources = sources.filter(
+    (source) => source.status === "ok" && source.count > 0,
   ).length;
-
-  const photos = listing.photos?.length
-    ? listing.photos
-    : listing.image
-      ? [listing.image]
-      : [];
-
-  const showConfidence =
-    verdict.verdict !== "Assessment unavailable" &&
-    verdict.verdict !== "Not enough data";
+  const mentionCount = webResults.length + newsResults.length;
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "reviews", label: "Reviews", count: reviews.length },
+    { id: "mentions", label: "Mentions", count: mentionCount },
+    { id: "nearby", label: "Nearby", count: neighborhood.length },
+  ];
+  const confidenceLevel = CONFIDENCE[verdict.confidence?.toLowerCase()] || 0;
+  const showConfidence = verdict.verdict !== "Assessment unavailable";
 
   return (
-    <div className="mx-auto w-full max-w-6xl min-w-0">
-      {/* HEADER */}
-      <section className="mb-6 sm:mb-8">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#9C7A1F] dark:text-[#C9A24B] sm:text-[11px]">
-          Investigation report
-        </p>
-
-        <div className="mt-3 flex min-w-0 flex-col gap-4">
-          <div className="min-w-0">
-            <h1 className="break-words font-display text-2xl leading-tight tracking-tight text-[#1B1E24] dark:text-[#F4F1EA] sm:text-4xl">
-              {listing.name || "Untitled listing"}
-            </h1>
-
-            <div className="mt-2 flex min-w-0 items-start gap-2 text-sm leading-6 text-[#5A564F] dark:text-[#9B968C]">
-              <MapPin size={15} className="mt-1 shrink-0 text-[#C9A24B]" />
-
-              <span className="min-w-0 break-words">
-                {listing.address || "Address not available"}
-              </span>
-            </div>
+    <div className="mx-auto w-full min-w-0 max-w-5xl">
+      <section className={`${card} p-5 sm:p-8`}>
+        <div className="min-w-0">
+          <h1
+            className={`break-words font-display text-3xl leading-tight tracking-tight sm:text-5xl ${heading}`}
+          >
+            {listing.name || "Untitled listing"}
+          </h1>
+          <div className="mt-3 flex min-w-0 items-start gap-2 text-sm leading-6 text-[#5A564F] dark:text-[#B7B2A8]">
+            <MapPin size={15} className="mt-0.5 shrink-0 text-[#C9A24B]" />
+            <span className="min-w-0 break-words">
+              {listing.address || "Address not available"}
+            </span>
           </div>
 
-          {/* ACTION BUTTONS */}
-          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <div className="mt-5 flex flex-wrap gap-2">
             {listingMapsLink && (
-              <ExternalLinkButton
+              <HeroLink
                 href={listingMapsLink}
                 icon={MapPin}
                 label="Google Maps"
+                light
               />
             )}
-
             {listing.website && (
-              <ExternalLinkButton
+              <HeroLink
                 href={listing.website}
                 icon={Globe}
                 label="Website"
+                light
+              />
+            )}
+            {listing.phone && (
+              <HeroLink
+                href={`tel:${listing.phone}`}
+                icon={Phone}
+                label={listing.phone}
+                light
               />
             )}
           </div>
         </div>
       </section>
 
-      {/* VERDICT */}
-      <section className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_4px_25px_rgba(0,0,0,0.04)] dark:border-white/[0.07] dark:bg-[#1B1E24] dark:shadow-none">
-        <div className="p-5 sm:p-8">
-          <div className="flex min-w-0 flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0 max-w-2xl">
-              <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-[#8A8680] dark:text-[#6E6A62] sm:text-xs">
-                <ShieldCheck size={15} className="shrink-0" />
-                SafeStay assessment
-              </div>
-
-              <h2 className="mt-3 font-display text-xl text-[#1B1E24] dark:text-[#F4F1EA] sm:text-2xl">
-                What we found
-              </h2>
-
-              <p className="mt-3 break-words text-sm leading-6 text-[#5A564F] dark:text-[#B7B2A8] sm:text-[15px] sm:leading-7">
-                {verdict.summary ||
-                  "No summary was generated for this listing."}
+      <section className={`${card} mt-4 p-4 sm:p-7`}>
+        <div className="flex min-w-0 flex-col gap-5 md:flex-row md:items-start md:justify-between md:gap-8">
+          <div className="min-w-0 md:max-w-xl">
+            <div className="mb-3">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C9A24B]/30 bg-[#C9A24B]/[0.08] px-3 py-1.5 text-[11px] font-medium text-[#80631A] dark:text-[#D6B26A]">
+                <ShieldCheck size={13} />
+                SafeStay report
+              </span>
+            </div>
+            <h2 className={`font-display text-xl sm:text-2xl ${heading}`}>
+              What we found
+            </h2>
+            <p className="mt-3 break-words text-sm leading-7 text-[#5A564F] dark:text-[#B7B2A8] sm:text-[15px]">
+              {verdict.summary || "No summary was generated for this listing."}
+            </p>
+            {verdict.reasoning && (
+              <p className={`mt-3 break-words text-xs leading-5 ${muted}`}>
+                Why this assessment: {verdict.reasoning}
               </p>
-            </div>
-
-            <div className="w-full min-w-0 lg:w-auto lg:max-w-xs">
-              <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-                <VerdictBadge verdict={verdict.verdict} />
-              </div>
-
-              {showConfidence && (
-                <div className="mt-3">
-                  <ConfidenceMeter level={verdict.confidence} />
-                </div>
-              )}
-
-              {verdict.verdict !== "Assessment unavailable" && (
-                <p className="mt-3 text-xs leading-5 text-[#8A8680] dark:text-[#8A8680] lg:text-right">
-                  {VERDICT_EXPLANATIONS[verdict.verdict]}
-                </p>
-              )}
-            </div>
+            )}
           </div>
-        </div>
 
-        {/* SOURCES */}
-        <div className="border-t border-black/[0.07] bg-[#FAF9F6] px-5 py-4 dark:border-white/[0.06] dark:bg-[#17191D] sm:px-8">
-          <div className="flex min-w-0 items-center gap-5 overflow-x-auto pb-1">
-            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8A8680] dark:text-[#6E6A62]">
-              Sources checked
-            </span>
-
-            {sourcesChecked.map(({ icon: Icon, label, done, count }) => (
-              <div
-                key={label}
-                className="flex shrink-0 items-center gap-2 text-xs"
-              >
-                <Icon
-                  size={14}
-                  className={
-                    done
-                      ? "text-[#4A7A54] dark:text-[#6E9277]"
-                      : "text-[#B0AAA0] dark:text-[#5A564F]"
-                  }
-                />
-
-                <span className="text-[#5A564F] dark:text-[#9B968C]">
-                  {label}
+          <div className="flex w-full min-w-0 flex-col items-end text-right md:w-64 md:shrink-0">
+            <VerdictBadge verdict={verdict.verdict} />
+            {showConfidence && (
+              <div className="mt-3 flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
+                <span className={`text-xs ${muted}`}>
+                  {["Confidence unclear", "Low", "Medium", "High"][
+                    confidenceLevel
+                  ]}
+                  {confidenceLevel > 0 && " confidence"}
                 </span>
-
-                {done && (
-                  <span className="text-[#8A8680] dark:text-[#6E6A62]">
-                    {count}
-                  </span>
-                )}
+                <div
+                  className="flex gap-1"
+                  aria-label={`${verdict.confidence || "Unknown"} confidence`}
+                >
+                  {[1, 2, 3].map((level) => (
+                    <span
+                      key={level}
+                      className={`h-1.5 w-5 rounded-full ${
+                        level <= confidenceLevel
+                          ? "bg-[#C9A24B]"
+                          : "bg-black/10 dark:bg-white/[0.1]"
+                      }`}
+                    />
+                  ))}
+                </div>
               </div>
-            ))}
+            )}
+            <p className={`mt-3 w-full text-left text-xs leading-5 ${muted} sm:text-right`}>
+              {EXPLANATIONS[verdict.verdict] ||
+                EXPLANATIONS["Not enough data"]}
+            </p>
 
-            <span className="hidden shrink-0 text-xs text-[#8A8680] dark:text-[#6E6A62] sm:block">
-              {sourcesCheckedCount} of {sourcesChecked.length} returned results
-            </span>
+            <div className="mt-4 flex w-full flex-wrap justify-start gap-2 sm:justify-end">
+              {sources.map(({ icon: Icon, label, count, status }) => (
+                <span
+                  key={label}
+                  title={
+                    status === "failed"
+                      ? `${label} check unavailable`
+                      : `${count} ${label.toLowerCase()} returned`
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${
+                    status === "failed"
+                      ? "border-[#C9A24B]/30 text-[#9C7A1F] dark:text-[#D6B26A]"
+                      : count > 0
+                        ? "border-[#4A7A54]/30 text-[#4A7A54] dark:border-[#6E9277]/30 dark:text-[#8FB596]"
+                        : "border-black/10 text-[#8A8680] dark:border-white/10 dark:text-[#6E6A62]"
+                  }`}
+                >
+                  <Icon size={12} className="shrink-0" />
+                  <span>{label}</span>
+                  {status === "failed" ? (
+                    <span className="rounded-full bg-[#C9A24B]/15 px-1.5 py-0.5 text-[10px] font-semibold">
+                      unavailable
+                    </span>
+                  ) : (
+                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-current/10 px-1 text-[10px] font-bold leading-none">
+                      {count}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
+        {sourceErrors.length > 0 && (
+          <p className={`mt-4 border-t border-black/[0.07] pt-3 text-xs leading-5 ${muted} dark:border-white/[0.07]`}>
+            Some checks could not be completed: {sourceErrors.join(", ")}.
+            Unavailable sources are not treated as negative evidence.
+          </p>
+        )}
       </section>
 
-      {/* PHOTOS */}
-      {photos.length > 0 && (
-        <PhotoGallery photos={photos} name={listing.name} />
-      )}
+      <section
+        aria-label="Listing facts"
+        className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5"
+      >
+        {[
+          { label: "Rating", value: listing.rating ?? "Not available", icon: Star },
+          { label: "Google reviews", value: listing.reviewCount ?? "Not available" },
+          { label: "Rent", value: details.rent || "Not mentioned" },
+          { label: "Food", value: details.food || "Not mentioned" },
+          { label: "Room", value: details.roomType || "Not mentioned" },
+        ].map(({ label, value, icon: Icon }) => (
+          <div
+            key={label}
+            className={`${card} min-w-0 px-3 py-3 sm:px-4 sm:py-3.5`}
+          >
+            <p className={`flex items-center gap-1.5 text-xs ${muted}`}>
+              {Icon && <Icon size={12} className="text-[#C9A24B]" />}
+              {label}
+            </p>
+            <p className={`mt-1.5 break-words text-sm font-medium ${heading}`}>
+              {value}
+            </p>
+          </div>
+        ))}
+      </section>
 
-      {/* CONTENT */}
-      <div className="mt-7 grid min-w-0 gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-8">
-        <main className="min-w-0 space-y-8 sm:space-y-10">
-          {verdict.evidence?.length > 0 && (
-            <ReportSection
-              title="Positive signals"
-              icon={CheckCircle2}
-              iconClass="text-[#4A7A54] dark:text-[#6E9277]"
+      <div
+        role="tablist"
+        aria-label="Investigation sections"
+        className="mt-8 flex gap-1 overflow-x-auto border-b border-black/[0.08] dark:border-white/[0.07]"
+      >
+        {tabs.map((tab) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              id={`listing-tab-${tab.id}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls="listing-tabpanel"
+              tabIndex={selected ? 0 : -1}
+              onKeyDown={(event) => {
+                const currentIndex = tabs.findIndex(
+                  (item) => item.id === activeTab,
+                );
+                let nextIndex = currentIndex;
+
+                if (event.key === "ArrowRight") {
+                  nextIndex = (currentIndex + 1) % tabs.length;
+                } else if (event.key === "ArrowLeft") {
+                  nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+                } else if (event.key === "Home") {
+                  nextIndex = 0;
+                } else if (event.key === "End") {
+                  nextIndex = tabs.length - 1;
+                } else {
+                  return;
+                }
+
+                event.preventDefault();
+                setActiveTab(tabs[nextIndex].id);
+                document
+                  .getElementById(`listing-tab-${tabs[nextIndex].id}`)
+                  ?.focus();
+              }}
+              onClick={() => setActiveTab(tab.id)}
+              className={`-mb-px shrink-0 border-b-2 px-3 py-3 text-xs font-medium transition sm:px-4 sm:text-sm ${
+                selected
+                  ? "border-[#C9A24B] text-[#9C7A1F] dark:text-[#D6B26A]"
+                  : "border-transparent text-[#8A8680] hover:text-[#1B1E24] dark:text-[#6E6A62] dark:hover:text-[#F4F1EA]"
+              }`}
             >
-              <ul className="space-y-3">
-                {verdict.evidence.map((item, index) => (
-                  <li
-                    key={index}
-                    className="flex min-w-0 items-start gap-3 text-sm leading-6 text-[#403C35] dark:text-[#B7B2A8]"
-                  >
-                    <CheckCircle2
-                      size={16}
-                      className="mt-1 shrink-0 text-[#4A7A54] dark:text-[#6E9277]"
-                    />
-
-                    <span className="min-w-0 break-words">{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </ReportSection>
-          )}
-
-          {verdict.warnings?.length > 0 && (
-            <ReportSection
-              title="Things to check"
-              icon={CircleAlert}
-              iconClass="text-[#9C7A1F] dark:text-[#D6B26A]"
-            >
-              <div className="rounded-xl border border-[#C9A24B]/25 bg-[#C9A24B]/[0.06] p-4 dark:border-[#C9A24B]/20 dark:bg-[#C9A24B]/[0.06] sm:p-5">
-                <ul className="space-y-3">
-                  {verdict.warnings.map((item, index) => (
-                    <li
-                      key={index}
-                      className="flex min-w-0 items-start gap-3 text-sm leading-6 text-[#5A564F] dark:text-[#B7B2A8]"
-                    >
-                      <CircleAlert
-                        size={16}
-                        className="mt-1 shrink-0 text-[#9C7A1F] dark:text-[#D6B26A]"
-                      />
-
-                      <span className="min-w-0 break-words">{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </ReportSection>
-          )}
-
-          <Reviews reviews={reviews} moreLink={googleReviewsLink} />
-
-          <RawResults title="Web mentions" source={googleSource} />
-
-          <RawResults title="News mentions" source={newsSource} />
-        </main>
-
-        {/* SIDEBAR */}
-        <aside className="min-w-0 space-y-5">
-          <DetailsCard listing={listing} />
-
-          <ReportedDetails details={verdict.reportedDetails} />
-
-          {neighborhood.length > 0 && (
-            <NearbyPlaces neighborhood={neighborhood} />
-          )}
-        </aside>
+              <span>{tab.label}</span>
+              {tab.count > 0 && (
+                <span
+                  className={`ml-1.5 inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-semibold leading-none sm:ml-2 ${
+                    selected
+                      ? "bg-[#C9A24B]/15 text-[#80631A] dark:text-[#D6B26A]"
+                      : "bg-black/[0.06] text-[#77736B] dark:bg-white/[0.08] dark:text-[#AAA59A]"
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      <p className="mt-8 border-t border-black/[0.07] pt-5 text-[11px] leading-5 text-[#8A8680] dark:border-white/[0.06] dark:text-[#5A564F] sm:mt-10">
-        SafeStay's assessment uses publicly available web, news, and map
-        information. Information may be incomplete or outdated. Always verify
-        important details directly with the property.
-      </p>
+      <div
+        id="listing-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`listing-tab-${activeTab}`}
+        className="mt-6 min-w-0"
+      >
+        {activeTab === "overview" && (
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <SignalList
+                title="Positive signals"
+                icon={CheckCircle2}
+                items={verdict.evidence}
+                empty="No positive listing-specific signals were returned."
+                tone="good"
+              />
+              <SignalList
+                title="Things to check"
+                icon={CircleAlert}
+                items={verdict.warnings}
+                empty="No specific warnings were returned."
+                tone="warn"
+              />
+            </div>
+
+            {facilities.length > 0 && (
+              <div className={`${card} p-5 mt-5`}>
+                <h3 className={`text-sm font-semibold ${heading}`}>
+                  Reported facilities
+                </h3>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {facilities.map((facility, index) => (
+                    <span
+                      key={`${facility}-${index}`}
+                      className="rounded-full border border-black/[0.08] px-3 py-1 text-xs text-[#403C35] dark:border-white/[0.1] dark:text-[#D8D4CB]"
+                    >
+                      {facility}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {photos.length > 1 && (
+              <div>
+                <h3 className={`mb-3 mt-6 text-sm font-semibold ${heading}`}>
+                  More listing photos
+                </h3>
+                <PhotoStrip photos={photos.slice(1)} name={listing.name} />
+              </div>
+            )}
+
+            <p className={`text-xs leading-5 mt-2 ${muted}`}>
+              Rent and facilities are shown only when mentioned in public
+              sources. They may be outdated; confirm them with the property.
+            </p>
+          </div>
+        )}
+
+        {activeTab === "reviews" && (
+          <Reviews
+            reviews={reviews}
+            reviewsLink={reviewsLink}
+            unavailable={sourceErrors.includes("Google reviews")}
+          />
+        )}
+
+        {activeTab === "mentions" && (
+          <div className="space-y-8">
+            {mentionCount === 0 && (
+              <Empty
+                text={
+                  googleSource?.status === "failed" ||
+                  newsSource?.status === "failed"
+                    ? "Some web or news searches could not be completed. A failed search is not evidence that no mentions exist."
+                    : "No web or news mentions were returned for the searches performed."
+                }
+              />
+            )}
+            <MentionGroup title="Web mentions" results={webResults} />
+            <MentionGroup title="News mentions" results={newsResults} />
+          </div>
+        )}
+
+        {activeTab === "nearby" && (
+          <NearbyPlaces
+            places={neighborhood}
+            unavailable={sourceErrors.includes("Neighborhood")}
+          />
+        )}
+      </div>
+
     </div>
   );
 }
 
-function ExternalLinkButton({ href, icon: Icon, label }) {
+function HeroLink({ href, icon: Icon, label, light = false }) {
+  const isPhone = href.startsWith("tel:");
+
   return (
     <a
       href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-black/[0.08] bg-white px-3.5 py-2.5 text-xs font-medium text-[#5A564F] transition hover:border-[#C9A24B]/40 hover:text-[#9C7A1F] sm:w-auto dark:border-white/[0.08] dark:bg-[#1B1E24] dark:text-[#B7B2A8] dark:hover:border-[#C9A24B]/30 dark:hover:text-[#D6B26A]"
+      target={isPhone ? undefined : "_blank"}
+      rel={isPhone ? undefined : "noreferrer"}
+      className={`inline-flex max-w-full items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition ${
+        light
+          ? "border border-black/[0.08] text-[#5A564F] hover:border-[#C9A24B]/40 hover:text-[#9C7A1F] dark:border-white/[0.1] dark:text-[#B7B2A8] dark:hover:text-[#D6B26A]"
+          : "bg-white/10 text-[#F4F1EA] backdrop-blur hover:bg-white/20"
+      }`}
     >
-      <Icon size={13} />
-      {label}
-      <ArrowUpRight size={11} />
+      <Icon size={13} className="shrink-0" />
+      <span className="break-all">{label}</span>
+      {!isPhone && <ArrowUpRight size={11} className="shrink-0" />}
     </a>
   );
 }
 
-function DetailsCard({ listing }) {
-  return (
-    <div className="rounded-xl border border-black/[0.08] bg-white p-5 dark:border-white/[0.07] dark:bg-[#1B1E24]">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8A8680] dark:text-[#6E6A62]">
-        Listing details
-      </p>
-
-      <dl className="mt-4 space-y-4">
-        <Fact icon={Star} label="Rating">
-          {listing.rating ?? "N/A"}
-        </Fact>
-
-        <Fact label="Reviews">{listing.reviewCount ?? "N/A"}</Fact>
-
-        <Fact label="Type">{listing.type || "PG"}</Fact>
-
-        {listing.phone && (
-          <Fact icon={Phone} label="Phone">
-            {listing.phone}
-          </Fact>
-        )}
-      </dl>
-    </div>
-  );
-}
-
-function NearbyPlaces({ neighborhood }) {
-  return (
-    <div className="rounded-xl border border-black/[0.08] bg-white p-5 dark:border-white/[0.07] dark:bg-[#1B1E24]">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8A8680] dark:text-[#6E6A62]">
-        Nearby
-      </p>
-
-      <div className="mt-4 space-y-4">
-        {neighborhood.map((place, index) => {
-          const link = mapsLink(
-            place.coordinates,
-            `${place.name} ${place.address || ""}`,
-          );
-
-          return (
-            <div
-              key={index}
-              className="flex min-w-0 items-start justify-between gap-3"
-            >
-              <div className="min-w-0">
-                <p className="break-words text-sm text-[#1B1E24] dark:text-[#D8D4CB]">
-                  {place.name}
-                </p>
-
-                <p className="mt-0.5 break-words text-xs text-[#8A8680] dark:text-[#6E6A62]">
-                  {place.type || "Place"}
-                </p>
-
-                {place.rating && (
-                  <div className="mt-1 flex items-center gap-1 text-[10px] text-[#9C7A1F] dark:text-[#D6B26A]">
-                    <Star size={10} className="fill-current" />
-                    {place.rating}
-                  </div>
-                )}
-              </div>
-
-              {link && (
-                <a
-                  href={link}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={`View ${place.name} on Google Maps`}
-                  className="shrink-0 rounded-md p-1.5 text-[#9C7A1F] transition hover:bg-[#C9A24B]/10 dark:text-[#C9A24B]"
-                >
-                  <MapPin size={14} />
-                </a>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ReportedDetails({ details }) {
-  const rent = details?.rent;
-  const food = details?.food;
-  const roomType = details?.roomType;
-  const facilities = details?.facilities || [];
-
-  const hasAnything = rent || food || roomType || facilities.length > 0;
+function SignalList({ title, icon: Icon, items = [], empty, tone }) {
+  const positive = tone === "good";
+  const iconClass = positive
+    ? "text-[#4A7A54] dark:text-[#6E9277]"
+    : "text-[#9C7A1F] dark:text-[#D6B26A]";
+  const shell = positive
+    ? "border-black/[0.08] bg-white dark:border-white/[0.07] dark:bg-[#1B1E24]"
+    : "border-[#C9A24B]/25 bg-[#C9A24B]/[0.06]";
 
   return (
-    <div className="rounded-xl border border-black/[0.08] bg-white p-5 dark:border-white/[0.07] dark:bg-[#1B1E24]">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8A8680] dark:text-[#6E6A62]">
-        Rent & facilities
-      </p>
-
-      {!hasAnything ? (
-        <p className="mt-3 text-xs leading-5 text-[#8A8680] dark:text-[#6E6A62]">
-          Not mentioned in the sources checked. Confirm these details directly
-          with the PG.
-        </p>
-      ) : (
-        <dl className="mt-4 space-y-3">
-          <Fact label="Rent">{rent || "Not mentioned"}</Fact>
-          <Fact label="Food">{food || "Not mentioned"}</Fact>
-          <Fact label="Room">{roomType || "Not mentioned"}</Fact>
-
-          {facilities.length > 0 && (
-            <div className="pt-1">
-              <span className="text-xs text-[#8A8680] dark:text-[#6E6A62]">
-                Facilities
-              </span>
-
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {facilities.map((facility, index) => (
-                  <span
-                    key={index}
-                    className="break-words rounded-full border border-black/[0.08] px-2.5 py-1 text-[11px] text-[#403C35] dark:border-white/[0.1] dark:text-[#D8D4CB]"
-                  >
-                    {facility}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </dl>
-      )}
-
-      <p className="mt-4 text-[10px] leading-4 text-[#B0AAA0] dark:text-[#5A564F]">
-        Based on public search information and may not be current.
-      </p>
-    </div>
-  );
-}
-
-function Fact({ icon: Icon, label, children }) {
-  return (
-    <div className="flex min-w-0 items-start justify-between gap-4">
-      <span className="flex shrink-0 items-center gap-1.5 text-xs text-[#8A8680] dark:text-[#6E6A62]">
-        {Icon && <Icon size={13} />}
-        {label}
-      </span>
-
-      <span className="min-w-0 max-w-[65%] break-words text-right text-xs font-medium text-[#1B1E24] dark:text-[#D8D4CB]">
-        {children}
-      </span>
-    </div>
-  );
-}
-
-function ReportSection({ title, icon: Icon, iconClass, children }) {
-  return (
-    <section className="min-w-0">
-      <div className="mb-4 flex items-center gap-2">
+    <section className={`min-w-0 rounded-2xl border p-5 ${shell}`}>
+      <div className="flex items-center gap-2">
         <Icon size={17} className={iconClass} />
-
-        <h3 className="text-sm font-semibold text-[#1B1E24] dark:text-[#F4F1EA]">
-          {title}
-        </h3>
+        <h3 className={`text-sm font-semibold ${heading}`}>{title}</h3>
       </div>
-
-      {children}
+      {items?.length > 0 ? (
+        <ul className="mt-4 space-y-3">
+          {items.map((item, index) => (
+            <li
+              key={`${item}-${index}`}
+              className="flex min-w-0 items-start gap-3 text-sm leading-6 text-[#403C35] dark:text-[#B7B2A8]"
+            >
+              <Icon size={15} className={`mt-1 shrink-0 ${iconClass}`} />
+              <span className="min-w-0 break-words">{item}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className={`mt-3 text-xs leading-5 ${muted}`}>{empty}</p>
+      )}
     </section>
   );
 }
 
-const VERDICT_EXPLANATIONS = {
-  Verified: "We found good signs and no serious concerns in public sources.",
-  Caution: "We found a few things worth reading before you decide.",
-  "Red Flag": "We found serious concerns — read the details below.",
-  "Not enough data":
-    "We couldn't find enough public information to assess this listing.",
-  "Assessment unavailable":
-    "The assessment service is temporarily unavailable. The information collected above is still shown for you to review.",
-};
-
-// Confidence describes how sure the assessment is, not how much data was found
-const CONFIDENCE_LABELS = {
-  low: "Low confidence",
-  medium: "Medium confidence",
-  high: "High confidence",
-};
-
-function ConfidenceMeter({ level }) {
-  const levels = {
-    low: 1,
-    medium: 2,
-    high: 3,
-  };
-
-  const key = level?.toLowerCase();
-  const filled = levels[key] || 0;
-
+function PhotoStrip({ photos, name }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
-      <span className="text-[11px] text-[#8A8680] dark:text-[#6E6A62]">
-        {CONFIDENCE_LABELS[key] || "Confidence unclear"}
-      </span>
-
-      <div className="flex shrink-0 gap-1">
-        {[1, 2, 3].map((index) => (
-          <span
-            key={index}
-            className={`h-1.5 w-4 rounded-full ${
-              index <= filled
-                ? "bg-[#C9A24B]"
-                : "bg-black/10 dark:bg-white/[0.1]"
-            }`}
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      {photos.map((photo, index) => (
+        <a
+          key={`${photo}-${index}`}
+          href={photo}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 overflow-hidden rounded-xl border border-black/[0.08] dark:border-white/[0.07]"
+        >
+          <img
+            src={photo}
+            alt={`${name || "Listing"} photo ${index + 2}`}
+            loading="lazy"
+            className="h-10 w-10 object-cover transition-transform hover:scale-105 sm:h-28 sm:w-44"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
           />
-        ))}
-      </div>
+        </a>
+      ))}
     </div>
   );
 }
 
-function PhotoGallery({ photos, name }) {
-  return (
-    <div className="mt-6 sm:mt-8">
-      <div className="overflow-hidden rounded-2xl border border-black/[0.08] dark:border-white/[0.07]">
-        <img
-          src={photos[0]}
-          alt={name}
-          className="aspect-[16/9] w-full object-cover sm:aspect-[16/7]"
-          loading="lazy"
-          onError={(e) => {
-            e.currentTarget.style.display = "none";
-          }}
-        />
-      </div>
-
-      {photos.length > 1 && (
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          {photos.slice(1, 8).map((src, index) => (
-            <a
-              key={index}
-              href={src}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 overflow-hidden rounded-lg border border-black/[0.08] dark:border-white/[0.07]"
-            >
-              <img
-                src={src}
-                alt={`${name} photo ${index + 2}`}
-                className="h-16 w-24 object-cover transition-transform hover:scale-105 sm:h-20 sm:w-28"
-                loading="lazy"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                }}
-              />
-            </a>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Reviews({ reviews, moreLink }) {
-  if (!reviews?.length) return null;
+function Reviews({ reviews, reviewsLink, unavailable }) {
+  if (!reviews?.length) {
+    return (
+      <Empty
+        text={
+          unavailable
+            ? "Google reviews could not be loaded for this investigation."
+            : "No public Google reviews were returned for this listing."
+        }
+      />
+    );
+  }
 
   return (
-    <section className="min-w-0">
-      <div className="flex items-center justify-between gap-4">
-        <h3 className="text-sm font-semibold text-[#1B1E24] dark:text-[#F4F1EA]">
-          Reviews
-        </h3>
-
-        {moreLink && (
-          <a
-            href={moreLink}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-[#9C7A1F] hover:text-[#C9A24B] dark:text-[#C9A24B]"
+    <div>
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+        {reviews.map((review, index) => (
+          <article
+            key={`${review.author}-${review.date}-${index}`}
+            className={`${card} min-w-0 p-4`}
           >
-            See all
-            <ExternalLink size={10} />
-          </a>
-        )}
-      </div>
-
-      <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
-        {reviews.slice(0, 4).map((review, index) => (
-          <a
-            key={index}
-            href={moreLink}
-            target="_blank"
-            rel="noreferrer"
-            className="min-w-0 rounded-xl border border-black/[0.08] p-4 transition hover:border-[#C9A24B]/40 dark:border-white/[0.07] dark:hover:border-[#C9A24B]/30"
-          >
-            <div className="flex min-w-0 items-center justify-between gap-3">
-              <p className="min-w-0 truncate text-sm font-medium text-[#1B1E24] dark:text-[#D8D4CB]">
-                {review.author}
+            <div className="flex items-center justify-between gap-3">
+              <p className={`min-w-0 truncate text-sm font-medium ${heading}`}>
+                {review.author || "Google reviewer"}
               </p>
-
               {review.rating != null && (
                 <span className="flex shrink-0 items-center gap-1 text-xs text-[#9C7A1F] dark:text-[#D6B26A]">
                   <Star size={11} className="fill-current" />
@@ -613,17 +576,63 @@ function Reviews({ reviews, moreLink }) {
                 </span>
               )}
             </div>
-
             {review.snippet && (
-              <p className="mt-2 line-clamp-3 break-words text-xs leading-5 text-[#5A564F] dark:text-[#8A8680]">
+              <p className="mt-2 break-words text-xs leading-5 text-[#5A564F] dark:text-[#8A8680]">
                 {review.snippet}
               </p>
             )}
-
             {review.date && (
-              <p className="mt-2 text-[10px] text-[#B0AAA0] dark:text-[#5A564F]">
-                {review.date}
+              <p className={`mt-2 text-[10px] ${muted}`}>{review.date}</p>
+            )}
+          </article>
+        ))}
+      </div>
+      {reviewsLink && (
+        <a
+          href={reviewsLink}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex items-center gap-1 text-xs text-[#9C7A1F] hover:text-[#C9A24B] dark:text-[#C9A24B]"
+        >
+          See all reviews on Google
+          <ExternalLink size={10} />
+        </a>
+      )}
+    </div>
+  );
+}
+
+function MentionGroup({ title, results }) {
+  if (!results?.length) return null;
+
+  return (
+    <section className="min-w-0">
+      <h3 className={`text-sm font-semibold ${heading}`}>{title}</h3>
+      <div className="mt-4 space-y-3">
+        {results.map((result, index) => (
+          <a
+            key={`${result.link || result.title}-${index}`}
+            href={result.link}
+            target="_blank"
+            rel="noreferrer"
+            className={`${card} block min-w-0 p-4 transition hover:border-[#C9A24B]/40`}
+          >
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <p className={`min-w-0 break-words text-sm font-medium ${heading}`}>
+                {result.title || "Untitled result"}
               </p>
+              <ArrowUpRight
+                size={14}
+                className="mt-0.5 shrink-0 text-[#8A8680]"
+              />
+            </div>
+            {result.snippet && (
+              <p className="mt-2 break-words text-xs leading-5 text-[#5A564F] dark:text-[#8A8680]">
+                {result.snippet}
+              </p>
+            )}
+            {result.date && (
+              <p className={`mt-2 text-[10px] ${muted}`}>{result.date}</p>
             )}
           </a>
         ))}
@@ -632,45 +641,73 @@ function Reviews({ reviews, moreLink }) {
   );
 }
 
-function RawResults({ title, source }) {
-  if (!source || !source.results?.length) return null;
+function NearbyPlaces({ places, unavailable }) {
+  if (!places.length) {
+    return (
+      <Empty
+        text={
+          unavailable
+            ? "Nearby places could not be loaded for this investigation."
+            : "No nearby places were returned for the searched area."
+        }
+      />
+    );
+  }
 
   return (
-    <section className="min-w-0">
-      <h3 className="text-sm font-semibold text-[#1B1E24] dark:text-[#F4F1EA]">
-        {title}
-      </h3>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {places.map((place, index) => {
+        const link = mapsLink(
+          place.coordinates,
+          [place.name, place.address].filter(Boolean).join(" "),
+        );
 
-      <div className="mt-4 space-y-3">
-        {source.results.slice(0, 3).map((result, index) => (
-          <a
-            key={index}
-            href={result.link}
-            target="_blank"
-            rel="noreferrer"
-            className="block min-w-0 rounded-xl border border-black/[0.08] p-4 transition hover:border-[#C9A24B]/40 dark:border-white/[0.07] dark:hover:border-[#C9A24B]/30"
+        return (
+          <article
+            key={`${place.name}-${place.address}-${index}`}
+            className={`${card} flex min-w-0 items-start justify-between gap-3 p-4`}
           >
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <p className="min-w-0 truncate text-sm font-medium text-[#1B1E24] dark:text-[#D8D4CB]">
-                {result.title}
+            <div className="min-w-0">
+              <p className={`break-words text-sm ${heading}`}>
+                {place.name || "Unnamed place"}
               </p>
-
-              <ArrowUpRight
-                size={14}
-                className="mt-0.5 shrink-0 text-[#8A8680]"
-              />
+              <p className={`mt-0.5 break-words text-xs ${muted}`}>
+                {place.type || place.address || "Nearby place"}
+              </p>
+              {place.address && place.type && (
+                <p className={`mt-1 break-words text-[11px] ${muted}`}>
+                  {place.address}
+                </p>
+              )}
+              {place.rating != null && (
+                <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#9C7A1F] dark:text-[#D6B26A]">
+                  <Star size={10} className="fill-current" />
+                  {place.rating}
+                  {place.reviewCount != null &&
+                    ` · ${place.reviewCount} reviews`}
+                </p>
+              )}
             </div>
-
-            {result.snippet && (
-              <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-[#5A564F] dark:text-[#8A8680]">
-                {result.snippet}
-              </p>
+            {link && (
+              <a
+                href={link}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`View ${place.name || "nearby place"} on Google Maps`}
+                className="shrink-0 rounded-md p-1.5 text-[#9C7A1F] transition hover:bg-[#C9A24B]/10 dark:text-[#C9A24B]"
+              >
+                <MapPin size={14} />
+              </a>
             )}
-          </a>
-        ))}
-      </div>
-    </section>
+          </article>
+        );
+      })}
+    </div>
   );
+}
+
+function Empty({ text }) {
+  return <div className={`${card} p-6 text-center text-sm ${muted}`}>{text}</div>;
 }
 
 export default ListingDetails;
